@@ -6,21 +6,26 @@ import (
 	"os"
 	"time"
 
+	"asdasd/internal/config"
 	server "asdasd/internal/http"
 	"asdasd/internal/snapshot"
 )
 
-const addr = ":8080"
-
 func main() {
+	cfg, err := config.New()
+	if err != nil {
+		slog.Error("invalid configuration", "error", err)
+		os.Exit(1)
+	}
+
 	svc := snapshot.NewService(snapshot.NewMemoryStore())
 	srv := &http.Server{
-		Addr:              addr,
+		Addr:              cfg.Addr,
 		Handler:           server.New(svc),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
-	slog.Info("listening", "addr", addr)
+	slog.Info("listening", "addr", cfg.Addr)
 	if err := srv.ListenAndServe(); err != nil {
 		slog.Error("server stopped", "error", err)
 		os.Exit(1)
