@@ -177,3 +177,66 @@ The store is in memory, so all state is lost when the process exits anyway.
 The point of settling snapshots is that the code already behaves correctly
 with a persistent store: after a restart, nothing would be stuck in a state
 that no running process will ever finish.
+
+## Design decisions
+The main ones to mention:
+- Workers: to limit the concurrent usage, I have implemented channels (both for restricting only 1 job on the volume and having 3 running jobs in parallel at most).
+  The size of the channel is the limiting factor, using struct{}{} as a filler and draining (<-) the channel when the job is done, so the next goroutine can fill it and proceed
+
+- Store: The update method of the store. I wanted to make sure the store itself is not coupled with the logic of the state of snapshots, so for the update
+  it gets "logic" provided as func arg
+
+- Status code: tenants "sniffing" around snapshots not owned by them: to avoid leaking too much information, I went with 404. In my opinion that's
+  a perfectly fine status code for saying "snapshot not found (at least one, that you have business with)". GitHub also does this when you try to open up a private repo
+  422 for reused idempotency key: I was a bit torn between this and bad request (400), but 422 describes that the header key is not being used correctly
+
+- Idempotency and quota: both are checked inside Store.Create, under the same lock as the insert, so concurrent requests can't create duplicates or go
+  over 10. A replay is checked before the quota, so a retry still works when the tenant is at the limit.
+
+- Backoff: a job keeps its volume lock while it waits to retry, but gives back the global slot, so a job that is only waiting doesn't block other volumes.
+
+- Graceful shutdown: HTTP stops first, then the worker drains everything that was already accepted (those requests got a 202). Whatever is unfinished at
+  the deadline is set to failed or error_deleting, so nothing stays in pending, creating or deleting.
+
+
+## AI usage
+I used Claude Code throughout the project:
+- Implementation of larger parts: the background worker, config loading, the storage mock, idempotency, the quota, request ID logging,
+  graceful shutdown, Dockerfile and Makefile. I made the design decisions, reviewed the code and changed parts of it.
+- Most of the README sections above "Design decisions"
+- Generating tests (I provided the test cases for some of them)
+- Discussing pros and cons of each approach, code review
+
+
+## Things I'd do differently in a live environment
+- I'd implement queues (RabbitMQ, AWS SQS), so in case of a crash we can replay those messagesk
+- Some kind of retry for the stuck messages at startup
+- A normal database, so the state survives restarts and can be shared by multiple instances (unique indexes for idempotency, transactions for the quota)
+- Real authentication
+- Rate limiting by user
+
+
+## Answers for the questions:
+
+1. At the moment, each instance has its own counter for the maximum concurrency. Having multiple instances without some kind of source of truth
+for the concurrent usage would mean we would go over the intended parallel usage. Redis would be a fine candidate for this, or a slot table in the shared database.
+The volume lock has the same problem: it's an in-memory map, so two instances could run operations on the same volume at the same time. I'd move it to the
+shared database too, as a lock row per volume with an expiry, so a crashed instance doesn't block the volume forever.
+Idempotency breaks as well: the keys are only remembered by the instance that got the request, so a retry that lands on another instance would create a
+duplicate. A unique index on (tenant_id, idempotency_key) in the database solves it, and the quota check should run in the same transaction as the insert.
+
+2. With the current in-memory store everything is simply lost on restart. With a real database the record would stay stuck in creating: no process would
+ever finish it, and the tenant couldn't delete it either. Meanwhile Ceph may or may not have created the snapshot, so it could become an orphan.
+I'd make some kind of retry at startup or another service for monitoring the status changes and start the "self healing" if a snapshot doesn't change
+status for a while. Retrying is safe because the storage snapshot is named after our snapshot ID, and create and delete are idempotent.
+For orphans, a periodic job would compare the snapshots in Ceph with the database and delete the ones that have no record.
+
+3. As far as I understand, a crash-consistent snapshot is like pulling the power cord at one point in time: the disk is consistent, but anything the guest
+or the applications still had in memory might be missing. Application-consistent means the apps also flushed and paused before the snapshot.
+On KVM/QEMU I think I'd use the QEMU guest agent's filesystem freeze (fsfreeze) right before taking the RBD snapshot and thaw right after, and fall back to
+crash-consistent if the agent isn't available, though I'm not completely sure about the details of flushing QEMU's own cache.
+
+4. So, we already have some kind of defense for the spamming: the quota caps a tenant at 10 active snapshots, so 490 of the 500 requests get a 409, and the
+global concurrency limit protects the storage. It's on application side though. Some kind of rate limiter (NGINX or an API gateway) should sit in front of
+the service, limiting per tenant and answering 429. I'd also implement a fair way of usage distribution (so the system is not busy with one user's
+requests all the time).
