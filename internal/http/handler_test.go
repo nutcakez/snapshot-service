@@ -1,8 +1,11 @@
 package http
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -10,6 +13,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"asdasd/internal/logctx"
 	"asdasd/internal/snapshot"
 )
 
@@ -342,5 +346,91 @@ func TestCreateOverQuota(t *testing.T) {
 	e := decode[errorResponse](t, w)
 	if e.Error.Code != "quota_exceeded" || !strings.Contains(e.Error.Message, "at most 10") {
 		t.Fatalf("got %+v, want code quota_exceeded mentioning the limit", e.Error)
+	}
+}
+
+// captureLogs sends the default logger to a buffer for the rest of the test.
+func captureLogs(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(logctx.NewHandler(slog.NewTextHandler(&buf, nil))))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+	return &buf
+}
+
+func TestEveryResponseHasANewRequestID(t *testing.T) {
+	h, _ := newTestAPI()
+	a := do(t, h, http.MethodGet, "/healthz", "", "").Header().Get(logctx.RequestIDHeader)
+	b := do(t, h, http.MethodGet, "/healthz", "", "").Header().Get(logctx.RequestIDHeader)
+	if a == "" || a == b {
+		t.Fatalf("got request IDs %q and %q, want two different ones", a, b)
+	}
+}
+
+func TestClientRequestIDIsIgnored(t *testing.T) {
+	h, _ := newTestAPI()
+	r := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	r.Header.Set(logctx.RequestIDHeader, "client-chosen")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	if got := w.Header().Get(logctx.RequestIDHeader); got == "" || got == "client-chosen" {
+		t.Fatalf("got %q, want a new server-generated ID", got)
+	}
+}
+
+func TestLogContextReachesHandler(t *testing.T) {
+	var reqID, tenantID string
+	h := withLogContext(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		reqID = logctx.RequestID(r.Context())
+		tenantID = logctx.TenantID(r.Context())
+	}))
+	r := httptest.NewRequest(http.MethodGet, "/", nil)
+	r.Header.Set(tenantHeader, "t1")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	if reqID == "" || reqID != w.Header().Get(logctx.RequestIDHeader) || tenantID != "t1" {
+		t.Fatalf("handler saw request=%q tenant=%q, header %q", reqID, tenantID, w.Header().Get(logctx.RequestIDHeader))
+	}
+}
+
+func TestAccessLogLine(t *testing.T) {
+	logs := captureLogs(t)
+	h, _ := newTestAPI()
+	w := do(t, h, http.MethodGet, "/v1/snapshots/missing", "t1", "")
+
+	line := logs.String()
+	for _, want := range []string{
+		"msg=request", "method=GET", "path=/v1/snapshots/missing", "status=404", "duration=",
+		"request_id=" + w.Header().Get(logctx.RequestIDHeader), "tenant_id=t1",
+	} {
+		if !strings.Contains(line, want) {
+			t.Errorf("access log %q is missing %q", line, want)
+		}
+	}
+}
+
+func TestAccessLogWithoutTenant(t *testing.T) {
+	logs := captureLogs(t)
+	h, _ := newTestAPI()
+	do(t, h, http.MethodGet, "/healthz", "", "")
+	if line := logs.String(); !strings.Contains(line, "request_id=") || strings.Contains(line, "tenant_id") {
+		t.Fatalf("access log %q: want a request_id and no tenant_id", line)
+	}
+}
+
+// Error logs from handlers carry both IDs.
+func TestErrorLogHasRequestAndTenant(t *testing.T) {
+	logs := captureLogs(t)
+	if line := logs.String(); line != "" {
+		t.Fatalf("unexpected logs before the request: %q", line)
+	}
+	r := httptest.NewRequest(http.MethodGet, "/", nil)
+	ctx := logctx.WithTenantID(logctx.WithRequestID(r.Context(), "req-9"), "t9")
+	writeErrorResponse(httptest.NewRecorder(), r.WithContext(ctx), errors.New("boom"))
+	for _, want := range []string{`msg="request failed"`, "request_id=req-9", "tenant_id=t9"} {
+		if !strings.Contains(logs.String(), want) {
+			t.Errorf("error log %q is missing %q", logs.String(), want)
+		}
 	}
 }

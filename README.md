@@ -105,3 +105,26 @@ so the client can retry it with the same key after freeing a slot.
 
 The count and the insert happen under the same lock, so concurrent requests
 can't exceed the limit.
+
+## Logging
+
+Logs are structured `key=value` lines from `log/slog`, written to stdout.
+
+Every request gets a new random request ID, returned in the `X-Request-ID`
+response header. A request ID sent by the client is ignored, so IDs are always
+unique and generated the same way. Each request's log lines also carry the
+tenant from the `X-Tenant-ID` header, when there is one.
+
+Both IDs appear on the access log line for the request and on every log line
+of the background job it started, so one search finds everything for a
+request, or everything for a tenant:
+
+```
+level=INFO msg=request method=POST path=/v1/volumes/vol-1/snapshots status=202 duration=201µs request_id=TWJ4Q… tenant_id=t1
+level=INFO msg="storage operation started" op=create snapshot_id=FMVE3C… volume_id=vol-1 tenant_id=t1 request_id=TWJ4Q…
+level=INFO msg="storage operation finished" op=create snapshot_id=FMVE3C… volume_id=vol-1 tenant_id=t1 request_id=TWJ4Q…
+```
+
+In production I'd add distributed tracing (OpenTelemetry) on top, with trace
+IDs passed between services, and switch to JSON log output for the log
+pipeline. `slog.NewJSONHandler` is a one-line change in `cmd/server/main.go`.

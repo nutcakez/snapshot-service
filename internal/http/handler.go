@@ -28,7 +28,7 @@ func New(svc *snapshot.Service) http.Handler {
 	mux.HandleFunc("GET /v1/snapshots/{id}", withTenant(h.get))
 	mux.HandleFunc("DELETE /v1/snapshots/{id}", withTenant(h.delete))
 
-	return mux
+	return withLogContext(mux)
 }
 
 func (h *handler) healthz(w http.ResponseWriter, _ *http.Request) {
@@ -46,7 +46,7 @@ func (h *handler) create(w http.ResponseWriter, r *http.Request, tenantID string
 	}
 	snap, err := h.svc.Create(r.Context(), tenantID, r.PathValue("volumeId"), body.Name, r.Header.Get(idempotencyHeader))
 	if err != nil {
-		writeErrorResponse(w, err)
+		writeErrorResponse(w, r, err)
 		return
 	}
 	writeResponse(w, http.StatusAccepted, snap)
@@ -55,7 +55,7 @@ func (h *handler) create(w http.ResponseWriter, r *http.Request, tenantID string
 func (h *handler) get(w http.ResponseWriter, r *http.Request, tenantID string) {
 	snap, err := h.svc.Get(r.Context(), tenantID, r.PathValue("id"))
 	if err != nil {
-		writeErrorResponse(w, err)
+		writeErrorResponse(w, r, err)
 		return
 	}
 	writeResponse(w, http.StatusOK, snap)
@@ -68,7 +68,7 @@ func (h *handler) list(w http.ResponseWriter, r *http.Request, tenantID string) 
 		Status:   snapshot.Status(q.Get("status")),
 	})
 	if err != nil {
-		writeErrorResponse(w, err)
+		writeErrorResponse(w, r, err)
 		return
 	}
 	writeResponse(w, http.StatusOK, map[string][]snapshot.Snapshot{"snapshots": snaps})
@@ -77,13 +77,13 @@ func (h *handler) list(w http.ResponseWriter, r *http.Request, tenantID string) 
 func (h *handler) delete(w http.ResponseWriter, r *http.Request, tenantID string) {
 	snap, err := h.svc.Delete(r.Context(), tenantID, r.PathValue("id"))
 	if err != nil {
-		writeErrorResponse(w, err)
+		writeErrorResponse(w, r, err)
 		return
 	}
 	writeResponse(w, http.StatusAccepted, snap)
 }
 
-func writeErrorResponse(w http.ResponseWriter, err error) {
+func writeErrorResponse(w http.ResponseWriter, r *http.Request, err error) {
 	switch {
 	case errors.Is(err, snapshot.ErrNotFound):
 		writeError(w, http.StatusNotFound, "not_found", err.Error())
@@ -100,7 +100,7 @@ func writeErrorResponse(w http.ResponseWriter, err error) {
 	case errors.Is(err, snapshot.ErrIdempotencyKeyReused):
 		writeError(w, http.StatusUnprocessableEntity, "idempotency_key_reused", err.Error())
 	default:
-		slog.Error("request failed", "error", err)
+		slog.ErrorContext(r.Context(), "request failed", "error", err)
 		writeError(w, http.StatusInternalServerError, "internal", "internal server error")
 	}
 }

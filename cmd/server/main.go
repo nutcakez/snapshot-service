@@ -9,11 +9,13 @@ import (
 
 	"asdasd/internal/config"
 	server "asdasd/internal/http"
+	"asdasd/internal/logctx"
 	"asdasd/internal/snapshot"
 	"asdasd/internal/storage"
 )
 
 func main() {
+	slog.SetDefault(slog.New(logctx.NewHandler(slog.NewTextHandler(os.Stdout, nil))))
 	if err := start(); err != nil {
 		slog.Error("server failed", "error", err)
 		os.Exit(1)

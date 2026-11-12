@@ -5,6 +5,8 @@ import (
 	"crypto/rand"
 	"strings"
 	"time"
+
+	"asdasd/internal/logctx"
 )
 
 type Service struct {
@@ -61,7 +63,10 @@ func (s *Service) Create(ctx context.Context, tenantID, volumeID, name, idempote
 		}
 		return snap, nil
 	}
-	s.exec.Submit(Job{Op: OpCreate, TenantID: tenantID, SnapshotID: snap.ID, VolumeID: volumeID})
+	s.exec.Submit(Job{
+		Op: OpCreate, TenantID: tenantID, SnapshotID: snap.ID, VolumeID: volumeID,
+		RequestID: logctx.RequestID(ctx),
+	})
 	return snap, nil
 }
 
@@ -92,6 +97,9 @@ func (s *Service) Delete(ctx context.Context, tenantID, id string) (Snapshot, er
 	if err != nil {
 		return Snapshot{}, err
 	}
-	s.exec.Submit(Job{Op: OpDelete, TenantID: tenantID, SnapshotID: snap.ID, VolumeID: snap.VolumeID})
+	s.exec.Submit(Job{
+		Op: OpDelete, TenantID: tenantID, SnapshotID: snap.ID, VolumeID: snap.VolumeID,
+		RequestID: logctx.RequestID(ctx),
+	})
 	return snap, nil
 }

@@ -57,6 +57,7 @@ type Job struct {
 	TenantID   string
 	SnapshotID string
 	VolumeID   string
+	RequestID  string // of the request that started the job, for logging
 }
 
 // Executor runs jobs in the background. Submit must not block.
@@ -106,6 +107,9 @@ func (w *Worker) Submit(j Job) {
 
 func (w *Worker) run(ctx context.Context, j Job) {
 	log := w.log.With("op", j.Op, "snapshot_id", j.SnapshotID, "volume_id", j.VolumeID, "tenant_id", j.TenantID)
+	if j.RequestID != "" {
+		log = log.With("request_id", j.RequestID)
+	}
 
 	unlock, err := w.lockVolume(ctx, j.VolumeID)
 	if err != nil {
