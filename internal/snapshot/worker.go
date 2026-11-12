@@ -60,9 +60,10 @@ type Job struct {
 	RequestID  string // of the request that started the job, for logging
 }
 
-// Executor runs jobs in the background. Submit must not block.
+// Executor runs jobs in the background. Submit must not block. It returns
+// ErrShuttingDown when it no longer accepts jobs.
 type Executor interface {
-	Submit(Job)
+	Submit(Job) error
 }
 
 type Worker struct {
@@ -73,11 +74,24 @@ type Worker struct {
 
 	slots chan struct{} // one entry per running storage call
 
-	mu      sync.Mutex
-	volumes map[string]*volumeLock
+	mu       sync.Mutex // guards volumes and stopping
+	volumes  map[string]*volumeLock
+	stopping bool // set when Shutdown starts; Submit then starts nothing
 
 	wg sync.WaitGroup // jobs that haven't finished yet
+
+	// ctx is the parent of every job. Shutdown cancels it when its deadline
+	// passes, which stops running storage calls and backoff waits. A
+	// long-lived component owning its goroutines' lifetime is the accepted
+	// exception to not storing contexts in structs.
+	ctx    context.Context
+	cancel context.CancelFunc
 }
+
+const (
+	reasonNotStarted  = "service shut down before the operation started"
+	reasonInterrupted = "operation interrupted by service shutdown"
+)
 
 type volumeLock struct {
 	ch    chan struct{} // capacity 1: holding the lock means having sent into it
@@ -88,6 +102,7 @@ func NewWorker(backend StorageBackend, store Store, cfg WorkerConfig, log *slog.
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
+	ctx, cancel := context.WithCancel(context.Background())
 	return &Worker{
 		backend: backend,
 		store:   store,
@@ -95,24 +110,70 @@ func NewWorker(backend StorageBackend, store Store, cfg WorkerConfig, log *slog.
 		log:     log,
 		slots:   make(chan struct{}, cfg.MaxConcurrent),
 		volumes: make(map[string]*volumeLock),
+		ctx:     ctx,
+		cancel:  cancel,
 	}, nil
 }
 
-// Submit starts the job in the background and returns immediately.
-func (w *Worker) Submit(j Job) {
-	w.wg.Go(func() {
-		w.run(context.Background(), j)
-	})
+// Submit starts the job in the background and returns immediately. Once
+// shutdown has started it starts nothing: it settles the job's snapshot
+// (see settle) and returns ErrShuttingDown.
+func (w *Worker) Submit(j Job) error {
+	w.mu.Lock()
+	if w.stopping {
+		w.mu.Unlock()
+		w.settle(j, reasonNotStarted, w.jobLog(j))
+		return ErrShuttingDown
+	}
+	// Still under mu, so Shutdown can't start waiting on wg between the
+	// stopping check and the job being counted.
+	w.wg.Go(func() { w.run(w.ctx, j) })
+	w.mu.Unlock()
+	return nil
 }
 
-func (w *Worker) run(ctx context.Context, j Job) {
+// Shutdown stops the worker. Submit accepts nothing new, but every job
+// already submitted may keep running until ctx expires, including jobs still
+// waiting for their volume: they were accepted, and the client got its 202.
+// At the deadline, unfinished jobs are cancelled and settled. Shutdown returns
+// once every job has ended, with an error if the deadline passed. Calling it
+// more than once is safe.
+func (w *Worker) Shutdown(ctx context.Context) error {
+	w.mu.Lock()
+	w.stopping = true
+	w.mu.Unlock()
+
+	done := make(chan struct{})
+	go func() {
+		w.wg.Wait()
+		close(done)
+	}()
+
+	defer w.cancel()
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		w.cancel()
+		<-done // jobs stop quickly: calls and backoff waits watch w.ctx
+		return fmt.Errorf("deadline passed, running jobs were cancelled: %w", ctx.Err())
+	}
+}
+
+func (w *Worker) jobLog(j Job) *slog.Logger {
 	log := w.log.With("op", j.Op, "snapshot_id", j.SnapshotID, "volume_id", j.VolumeID, "tenant_id", j.TenantID)
 	if j.RequestID != "" {
 		log = log.With("request_id", j.RequestID)
 	}
+	return log
+}
+
+func (w *Worker) run(ctx context.Context, j Job) {
+	log := w.jobLog(j)
 
 	unlock, err := w.lockVolume(ctx, j.VolumeID)
 	if err != nil {
+		w.settle(j, reasonNotStarted, log)
 		return
 	}
 	defer unlock()
@@ -130,11 +191,14 @@ func (w *Worker) run(ctx context.Context, j Job) {
 	for attempt := 1; attempt <= w.cfg.MaxAttempts; attempt++ {
 		if attempt > 1 {
 			if err := sleep(ctx, w.backoff(attempt)); err != nil {
+				w.settle(j, reasonInterrupted, log)
 				return
 			}
 		}
 		callErr = w.call(ctx, j)
-		if ctx.Err() != nil {
+		if callErr != nil && ctx.Err() != nil {
+			// Cancelled by shutdown, not a storage failure: not an attempt.
+			w.settle(j, reasonInterrupted, log)
 			return
 		}
 		w.transition(j, running, func(s *Snapshot) {
@@ -211,6 +275,37 @@ func (w *Worker) transition(j Job, from Status, fn func(*Snapshot), log *slog.Lo
 	return true
 }
 
+// settle gives the snapshot of a job that won't run, or won't finish, a final
+// state, so nothing is left pending, creating or deleting after shutdown: a
+// create ends failed, a delete error_deleting, with the reason as the error.
+// Both states can be deleted by the client afterwards.
+//
+// It writes with context.Background() on purpose: the job's context is
+// already cancelled at this point. With a database this would be
+// context.WithoutCancel plus a short timeout.
+func (w *Worker) settle(j Job, reason string, log *slog.Logger) {
+	_, err := w.store.Update(context.Background(), j.TenantID, j.SnapshotID, func(s *Snapshot) error {
+		switch {
+		case j.Op == OpCreate && (s.Status == StatusPending || s.Status == StatusCreating):
+			s.Status = StatusFailed
+		case j.Op == OpDelete && s.Status == StatusDeleting:
+			s.Status = StatusErrorDeleting
+		default:
+			return fmt.Errorf("snapshot is %s, nothing to settle", s.Status)
+		}
+		s.Error = reason
+		s.UpdatedAt = time.Now().UTC()
+		return nil
+	})
+	if err != nil {
+		log.Error("settling snapshot failed", "error", err)
+		return
+	}
+	log.Warn("storage operation stopped by shutdown", "reason", reason)
+}
+
+// lockVolume waits until the job may use the volume, or fails with ctx's
+// error when ctx is cancelled first.
 func (w *Worker) lockVolume(ctx context.Context, volumeID string) (unlock func(), err error) {
 	w.mu.Lock()
 	vl := w.volumes[volumeID]

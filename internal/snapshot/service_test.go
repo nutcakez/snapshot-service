@@ -14,10 +14,11 @@ type recordingExecutor struct {
 	jobs []Job
 }
 
-func (r *recordingExecutor) Submit(j Job) {
+func (r *recordingExecutor) Submit(j Job) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.jobs = append(r.jobs, j)
+	return nil
 }
 
 func (r *recordingExecutor) submitted() []Job {

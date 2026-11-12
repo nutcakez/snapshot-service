@@ -27,7 +27,7 @@ type errorResponse struct {
 // noopExecutor drops jobs, so snapshots keep the states the tests set.
 type noopExecutor struct{}
 
-func (noopExecutor) Submit(snapshot.Job) {}
+func (noopExecutor) Submit(snapshot.Job) error { return nil }
 
 func newTestAPI() (http.Handler, *snapshot.MemoryStore) {
 	store := snapshot.NewMemoryStore()
@@ -432,5 +432,23 @@ func TestErrorLogHasRequestAndTenant(t *testing.T) {
 		if !strings.Contains(logs.String(), want) {
 			t.Errorf("error log %q is missing %q", logs.String(), want)
 		}
+	}
+}
+
+type stoppedExecutor struct{}
+
+func (stoppedExecutor) Submit(snapshot.Job) error { return snapshot.ErrShuttingDown }
+
+func TestCreateWhileShuttingDown(t *testing.T) {
+	h := New(snapshot.NewService(snapshot.NewMemoryStore(), stoppedExecutor{}))
+	w := do(t, h, http.MethodPost, "/v1/volumes/vol-1/snapshots", "t1", `{"name":"n"}`)
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("got %d, want 503", w.Code)
+	}
+	if e := decode[errorResponse](t, w); e.Error.Code != "shutting_down" {
+		t.Fatalf("got code %q, want shutting_down", e.Error.Code)
+	}
+	if w.Header().Get("Retry-After") == "" {
+		t.Fatal("missing Retry-After header")
 	}
 }

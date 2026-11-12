@@ -59,4 +59,5 @@ var (
 	ErrInvalidIdempotencyKey = errors.New("idempotency key must be at most 255 characters")
 	ErrIdempotencyKeyReused  = errors.New("idempotency key was already used for a different request")
 	ErrQuotaExceeded         = errors.New("snapshot quota exceeded")
+	ErrShuttingDown          = errors.New("service is shutting down")
 )

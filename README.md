@@ -128,3 +128,52 @@ level=INFO msg="storage operation finished" op=create snapshot_id=FMVE3C… volu
 In production I'd add distributed tracing (OpenTelemetry) on top, with trace
 IDs passed between services, and switch to JSON log output for the log
 pipeline. `slog.NewJSONHandler` is a one-line change in `cmd/server/main.go`.
+
+## Graceful shutdown
+
+On `SIGTERM` (what `docker compose stop` and Kubernetes send) or `SIGINT`
+(Ctrl+C), the service shuts down in this order, within one shared deadline of
+`SHUTDOWN_TIMEOUT` (default 35s):
+
+1. **HTTP stops.** New connections are refused right away. Requests already in
+   progress may finish.
+2. **The worker drains.** It accepts no new jobs, but every job submitted
+   before the signal may still run and finish, including retries. That covers
+   jobs still waiting for their volume too: their request already got a 202.
+3. **At the deadline**, running storage calls, backoff waits and jobs still
+   waiting for their volume are cancelled.
+
+The gate for new work is at the HTTP level: the server stops taking requests
+before the worker is told to shut down, so in a normal shutdown no request
+reaches the worker afterwards.
+
+No snapshot is left in `pending`, `creating` or `deleting`. A create that
+didn't finish ends `failed` and a delete ends `error_deleting`, with the reason
+in `error`:
+
+- `service shut down before the operation started`
+- `operation interrupted by service shutdown`
+
+Both states can be deleted by the client afterwards. A cancelled call isn't
+counted as a failed attempt. Because a create interrupted mid-call may still
+have created the snapshot in storage, deletes are idempotent on the storage
+side, so deleting the `failed` snapshot cleans it up either way.
+
+If the HTTP shutdown runs past its deadline and a handler only submits its
+job after the worker has stopped, that request gets
+`503 Service Unavailable` with the code `shutting_down` and a `Retry-After`
+header, and its snapshot is settled as not started.
+
+The process exits with code 0 when everything finished in time, and 1 with
+`stopping worker: deadline passed, running jobs were cancelled` when the
+deadline was hit. A second signal during shutdown kills the process
+immediately.
+
+Docker gives containers 10s after `SIGTERM` before killing them, so
+`compose.yaml` sets `stop_grace_period: 40s`, longer than `SHUTDOWN_TIMEOUT`.
+In Kubernetes, `terminationGracePeriodSeconds` plays the same role.
+
+The store is in memory, so all state is lost when the process exits anyway.
+The point of settling snapshots is that the code already behaves correctly
+with a persistent store: after a restart, nothing would be stuck in a state
+that no running process will ever finish.

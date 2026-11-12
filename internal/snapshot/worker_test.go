@@ -484,7 +484,7 @@ func TestCancelledWaitForVolumeReleasesIt(t *testing.T) {
 	unlock()
 }
 
-func TestRunCancelledWhileWaitingLeavesSnapshotPending(t *testing.T) {
+func TestRunCancelledWhileWaitingFailsSnapshot(t *testing.T) {
 	b := newFakeBackend(nil)
 	e := newTestEnv(t, b, fastConfig())
 	s := putSnapshot(t, e.store, Snapshot{ID: "s1", TenantID: "t1", VolumeID: "vol", Name: "n", Status: StatusPending})
@@ -501,11 +501,11 @@ func TestRunCancelledWhileWaitingLeavesSnapshotPending(t *testing.T) {
 	if n := b.callsFor(s.ID); n != 0 {
 		t.Fatalf("backend called %d times, want 0", n)
 	}
-	assertState(t, e.get(t, s), StatusPending, 0, "")
+	assertState(t, e.get(t, s), StatusFailed, 0, reasonNotStarted)
 }
 
-// Cancellation from outside (later: shutdown) stops the job without counting
-// it as a failed attempt or retrying it.
+// Cancellation from outside (shutdown) stops the job without counting it as a
+// failed attempt or retrying it, and leaves the snapshot in a final state.
 func TestRunCancelledDuringCallIsNotRetried(t *testing.T) {
 	started := make(chan struct{})
 	b := newFakeBackend(func(ctx context.Context, _ Op, _ string, _ int) error {
@@ -533,9 +533,7 @@ func TestRunCancelledDuringCallIsNotRetried(t *testing.T) {
 	if n := b.callsFor(s.ID); n != 1 {
 		t.Fatalf("backend called %d times, want 1", n)
 	}
-	if got := e.get(t, s); got.Attempts != 0 || got.Error != "" {
-		t.Fatalf("got attempts=%d error=%q, want the cancelled call not recorded", got.Attempts, got.Error)
-	}
+	assertState(t, e.get(t, s), StatusFailed, 0, reasonInterrupted)
 }
 
 func TestJobSkippedWhenSnapshotInUnexpectedState(t *testing.T) {
