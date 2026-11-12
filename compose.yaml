@@ -1,0 +1,30 @@
+# Run the service:   docker compose up --build
+# Run the tests:     docker compose run --rm --build test
+
+services:
+  app:
+    build:
+      context: .
+      target: runtime
+    ports:
+      - "8080:8080"
+    environment:
+      ADDR: ":8080"
+      SHUTDOWN_TIMEOUT: "35s"
+      STORAGE_MIN_DELAY: "2s"
+      STORAGE_MAX_DELAY: "10s"
+      STORAGE_FAILURE_RATE: "0.2"
+      WORKER_MAX_CONCURRENT: "3"
+      WORKER_MAX_ATTEMPTS: "3"
+      WORKER_CALL_TIMEOUT: "30s"
+      WORKER_BASE_BACKOFF: "1s"
+    # Docker sends SIGKILL 10s after SIGTERM by default. Allow longer than
+    # SHUTDOWN_TIMEOUT so the service can finish shutting down on its own.
+    stop_grace_period: 40s
+
+  test:
+    build:
+      context: .
+      target: test
+    # Only started explicitly, not by "docker compose up".
+    profiles: ["test"]
