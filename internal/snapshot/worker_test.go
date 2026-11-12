@@ -279,7 +279,7 @@ func TestGlobalConcurrencyLimit(t *testing.T) {
 	b := newFakeBackend(pause(20 * time.Millisecond))
 	e := newTestEnv(t, b, fastConfig()) // MaxConcurrent: 3
 	for i := range 20 {
-		e.create(t, "t1", fmt.Sprintf("vol-%d", i))
+		e.create(t, fmt.Sprintf("t%d", i%4), fmt.Sprintf("vol-%d", i)) // 4 tenants stay under the quota
 	}
 	e.waitFor(t)
 	if b.maxRunning != 3 {

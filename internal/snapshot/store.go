@@ -3,6 +3,7 @@ package snapshot
 import (
 	"cmp"
 	"context"
+	"fmt"
 	"slices"
 	"sync"
 )
@@ -13,10 +14,13 @@ type Filter struct {
 }
 
 type Store interface {
-	// Create stores s. If s has an idempotency key the tenant already used,
-	// nothing is stored, and the existing snapshot is returned with
-	// created=false. The check and the insert are atomic.
-	Create(ctx context.Context, s Snapshot) (stored Snapshot, created bool, err error)
+	// Create stores s, checking atomically with the insert:
+	//   - If s has an idempotency key the tenant already used, nothing is
+	//     stored and the existing snapshot is returned with created=false.
+	//   - Otherwise, if the tenant already has maxActive snapshots that are
+	//     not deleted, it fails with ErrQuotaExceeded. maxActive <= 0 means
+	//     no limit.
+	Create(ctx context.Context, s Snapshot, maxActive int) (stored Snapshot, created bool, err error)
 	Get(ctx context.Context, tenantID, id string) (Snapshot, error)
 	List(ctx context.Context, tenantID string, f Filter) ([]Snapshot, error)
 	// Update applies fn atomically and stores the result, unless fn returns an
@@ -42,18 +46,42 @@ func NewMemoryStore() *MemoryStore {
 	}
 }
 
-func (m *MemoryStore) Create(_ context.Context, s Snapshot) (Snapshot, bool, error) {
+func (m *MemoryStore) Create(_ context.Context, s Snapshot, maxActive int) (Snapshot, bool, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+
+	// A replay is checked first: it returns the existing snapshot even when
+	// the tenant is at its quota, because it creates nothing new.
+	k := idempotencyKey{s.TenantID, s.IdempotencyKey}
 	if s.IdempotencyKey != "" {
-		k := idempotencyKey{s.TenantID, s.IdempotencyKey}
 		if id, ok := m.byKey[k]; ok {
 			return m.snapshots[id], false, nil
 		}
+	}
+	if maxActive > 0 && m.activeCount(s.TenantID) >= maxActive {
+		return Snapshot{}, false, fmt.Errorf("%w: a tenant can have at most %d snapshots that are not deleted",
+			ErrQuotaExceeded, maxActive)
+	}
+
+	if s.IdempotencyKey != "" {
 		m.byKey[k] = s.ID
 	}
 	m.snapshots[s.ID] = s
 	return s, true, nil
+}
+
+// activeCount returns how many of the tenant's snapshots are not deleted.
+// It scans every snapshot, which is fine for an in-memory store; a database
+// would count with an indexed query in the same transaction as the insert.
+// The caller must hold m.mu.
+func (m *MemoryStore) activeCount(tenantID string) int {
+	n := 0
+	for _, s := range m.snapshots {
+		if s.TenantID == tenantID && s.Status != StatusDeleted {
+			n++
+		}
+	}
+	return n
 }
 
 func (m *MemoryStore) Get(_ context.Context, tenantID, id string) (Snapshot, error) {

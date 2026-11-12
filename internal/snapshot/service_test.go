@@ -39,7 +39,7 @@ func putSnapshot(t *testing.T, store *MemoryStore, s Snapshot) Snapshot {
 		s.CreatedAt = time.Now().UTC()
 		s.UpdatedAt = s.CreatedAt
 	}
-	if _, _, err := store.Create(context.Background(), s); err != nil {
+	if _, _, err := store.Create(context.Background(), s, 0); err != nil {
 		t.Fatal(err)
 	}
 	return s

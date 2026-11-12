@@ -85,3 +85,23 @@ curl -s 'localhost:8080/v1/snapshots?volume_id=vol-1&status=ready' -H 'X-Tenant-
 curl -s localhost:8080/v1/snapshots/<id> -H 'X-Tenant-ID: tenant-a'
 curl -s -X DELETE localhost:8080/v1/snapshots/<id> -H 'X-Tenant-ID: tenant-a'
 ```
+
+## Quota
+
+A tenant can have at most 10 snapshots that are not `deleted`. Every other
+state counts, including `failed` and `error_deleting`, so a failed snapshot
+keeps its slot until the tenant deletes it. A slot frees up when the delete
+finishes (`deleted`), not when it is requested (`deleting`).
+
+Creating an 11th snapshot returns `409 Conflict` with the code
+`quota_exceeded`. 409 fits because the request conflicts with the tenant's
+current state and succeeds once a snapshot is deleted. 429 would suggest
+that waiting helps, and 403 usually means missing permissions.
+
+Repeating a request with an `Idempotency-Key` that was already used still
+returns the existing snapshot when the tenant is at its quota, because it
+creates nothing new. A request rejected by the quota does not use up its key,
+so the client can retry it with the same key after freeing a slot.
+
+The count and the insert happen under the same lock, so concurrent requests
+can't exceed the limit.

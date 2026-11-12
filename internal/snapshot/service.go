@@ -16,7 +16,13 @@ func NewService(store Store, exec Executor) *Service {
 	return &Service{store: store, exec: exec}
 }
 
-const maxIdempotencyKeyLen = 255
+const (
+	maxIdempotencyKeyLen = 255
+
+	// MaxActiveSnapshots is how many snapshots that are not deleted a tenant
+	// may have at once.
+	MaxActiveSnapshots = 10
+)
 
 // Create records a new snapshot in the pending state and starts creating it.
 //
@@ -24,6 +30,9 @@ const maxIdempotencyKeyLen = 255
 // the first request created, in its current state, and starts nothing new.
 // Reusing the key for a different volume or name fails with
 // ErrIdempotencyKeyReused. An empty key disables this.
+//
+// A tenant can have at most MaxActiveSnapshots snapshots that are not deleted;
+// beyond that, Create fails with ErrQuotaExceeded.
 func (s *Service) Create(ctx context.Context, tenantID, volumeID, name, idempotencyKey string) (Snapshot, error) {
 	name = strings.TrimSpace(name)
 	if name == "" {
@@ -42,7 +51,7 @@ func (s *Service) Create(ctx context.Context, tenantID, volumeID, name, idempote
 		CreatedAt:      now,
 		UpdatedAt:      now,
 		IdempotencyKey: idempotencyKey,
-	})
+	}, MaxActiveSnapshots)
 	if err != nil {
 		return Snapshot{}, err
 	}

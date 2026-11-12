@@ -95,6 +95,8 @@ func writeErrorResponse(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusConflict, "invalid_state", err.Error())
 	case errors.Is(err, snapshot.ErrInvalidIdempotencyKey):
 		writeError(w, http.StatusBadRequest, "invalid_idempotency_key", err.Error())
+	case errors.Is(err, snapshot.ErrQuotaExceeded):
+		writeError(w, http.StatusConflict, "quota_exceeded", err.Error())
 	case errors.Is(err, snapshot.ErrIdempotencyKeyReused):
 		writeError(w, http.StatusUnprocessableEntity, "idempotency_key_reused", err.Error())
 	default:

@@ -327,3 +327,20 @@ func TestCreateIdempotencyErrors(t *testing.T) {
 		t.Fatalf("long key: got code %q", e.Error.Code)
 	}
 }
+
+func TestCreateOverQuota(t *testing.T) {
+	h, _ := newTestAPI()
+	for i := range snapshot.MaxActiveSnapshots {
+		if w := do(t, h, http.MethodPost, "/v1/volumes/vol-1/snapshots", "t1", `{"name":"n"}`); w.Code != http.StatusAccepted {
+			t.Fatalf("snapshot %d: got %d, want 202", i+1, w.Code)
+		}
+	}
+	w := do(t, h, http.MethodPost, "/v1/volumes/vol-1/snapshots", "t1", `{"name":"n"}`)
+	if w.Code != http.StatusConflict {
+		t.Fatalf("over quota: got %d, want 409", w.Code)
+	}
+	e := decode[errorResponse](t, w)
+	if e.Error.Code != "quota_exceeded" || !strings.Contains(e.Error.Message, "at most 10") {
+		t.Fatalf("got %+v, want code quota_exceeded mentioning the limit", e.Error)
+	}
+}
