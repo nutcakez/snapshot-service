@@ -280,3 +280,50 @@ func TestConcurrentDeleteHasOneWinner(t *testing.T) {
 		t.Errorf("accepted deletes = %d, want 1", got)
 	}
 }
+
+func doWithKey(t *testing.T, h http.Handler, target, tenant, key, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	r := httptest.NewRequest(http.MethodPost, target, strings.NewReader(body))
+	r.Header.Set(tenantHeader, tenant)
+	r.Header.Set(idempotencyHeader, key)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	return w
+}
+
+func TestCreateWithIdempotencyKey(t *testing.T) {
+	h, _ := newTestAPI()
+	first := doWithKey(t, h, "/v1/volumes/vol-1/snapshots", "t1", "key-1", `{"name":"nightly"}`)
+	second := doWithKey(t, h, "/v1/volumes/vol-1/snapshots", "t1", "key-1", `{"name":"nightly"}`)
+	if first.Code != http.StatusAccepted || second.Code != http.StatusAccepted {
+		t.Fatalf("got %d and %d, want 202 for both", first.Code, second.Code)
+	}
+	a, b := decode[snapshot.Snapshot](t, first), decode[snapshot.Snapshot](t, second)
+	if a.ID != b.ID {
+		t.Fatalf("replay returned %s, want %s", b.ID, a.ID)
+	}
+	if strings.Contains(second.Body.String(), "key-1") {
+		t.Fatalf("response exposes the idempotency key: %s", second.Body.String())
+	}
+}
+
+func TestCreateIdempotencyErrors(t *testing.T) {
+	h, _ := newTestAPI()
+	doWithKey(t, h, "/v1/volumes/vol-1/snapshots", "t1", "key-1", `{"name":"nightly"}`)
+
+	reused := doWithKey(t, h, "/v1/volumes/vol-2/snapshots", "t1", "key-1", `{"name":"nightly"}`)
+	if reused.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("reused key: got %d, want 422", reused.Code)
+	}
+	if e := decode[errorResponse](t, reused); e.Error.Code != "idempotency_key_reused" {
+		t.Fatalf("reused key: got code %q", e.Error.Code)
+	}
+
+	tooLong := doWithKey(t, h, "/v1/volumes/vol-1/snapshots", "t1", strings.Repeat("k", 256), `{"name":"nightly"}`)
+	if tooLong.Code != http.StatusBadRequest {
+		t.Fatalf("long key: got %d, want 400", tooLong.Code)
+	}
+	if e := decode[errorResponse](t, tooLong); e.Error.Code != "invalid_idempotency_key" {
+		t.Fatalf("long key: got code %q", e.Error.Code)
+	}
+}

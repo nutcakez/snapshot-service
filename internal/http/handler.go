@@ -44,7 +44,7 @@ func (h *handler) create(w http.ResponseWriter, r *http.Request, tenantID string
 		writeError(w, http.StatusBadRequest, "invalid_body", "request body must be valid JSON")
 		return
 	}
-	snap, err := h.svc.Create(r.Context(), tenantID, r.PathValue("volumeId"), body.Name)
+	snap, err := h.svc.Create(r.Context(), tenantID, r.PathValue("volumeId"), body.Name, r.Header.Get(idempotencyHeader))
 	if err != nil {
 		writeErrorResponse(w, err)
 		return
@@ -93,6 +93,10 @@ func writeErrorResponse(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusBadRequest, "invalid_status", err.Error())
 	case errors.Is(err, snapshot.ErrNotDeletable):
 		writeError(w, http.StatusConflict, "invalid_state", err.Error())
+	case errors.Is(err, snapshot.ErrInvalidIdempotencyKey):
+		writeError(w, http.StatusBadRequest, "invalid_idempotency_key", err.Error())
+	case errors.Is(err, snapshot.ErrIdempotencyKeyReused):
+		writeError(w, http.StatusUnprocessableEntity, "idempotency_key_reused", err.Error())
 	default:
 		slog.Error("request failed", "error", err)
 		writeError(w, http.StatusInternalServerError, "internal", "internal server error")

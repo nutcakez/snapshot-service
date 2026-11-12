@@ -39,7 +39,7 @@ func putSnapshot(t *testing.T, store *MemoryStore, s Snapshot) Snapshot {
 		s.CreatedAt = time.Now().UTC()
 		s.UpdatedAt = s.CreatedAt
 	}
-	if err := store.Create(context.Background(), s); err != nil {
+	if _, _, err := store.Create(context.Background(), s); err != nil {
 		t.Fatal(err)
 	}
 	return s
@@ -47,7 +47,7 @@ func putSnapshot(t *testing.T, store *MemoryStore, s Snapshot) Snapshot {
 
 func TestServiceCreateSubmitsCreateJob(t *testing.T) {
 	svc, _, exec := newRecordingService()
-	s, err := svc.Create(context.Background(), "t1", "vol-1", "nightly")
+	s, err := svc.Create(context.Background(), "t1", "vol-1", "nightly", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -59,7 +59,7 @@ func TestServiceCreateSubmitsCreateJob(t *testing.T) {
 
 func TestServiceCreateInvalidNameSubmitsNothing(t *testing.T) {
 	svc, store, exec := newRecordingService()
-	if _, err := svc.Create(context.Background(), "t1", "vol-1", "   "); !errors.Is(err, ErrInvalidName) {
+	if _, err := svc.Create(context.Background(), "t1", "vol-1", "   ", ""); !errors.Is(err, ErrInvalidName) {
 		t.Fatalf("got %v, want ErrInvalidName", err)
 	}
 	if got := exec.submitted(); len(got) != 0 {

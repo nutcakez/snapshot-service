@@ -104,7 +104,7 @@ func fastConfig() WorkerConfig {
 
 func (e *testEnv) create(t *testing.T, tenantID, volumeID string) Snapshot {
 	t.Helper()
-	s, err := e.svc.Create(context.Background(), tenantID, volumeID, "snap")
+	s, err := e.svc.Create(context.Background(), tenantID, volumeID, "snap", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -364,7 +364,7 @@ func TestConcurrentLoadWithMock(t *testing.T) {
 			defer wg.Done()
 			tenant := fmt.Sprintf("tenant-%d", ti)
 			for i := range perTenant {
-				if _, err := e.svc.Create(context.Background(), tenant, fmt.Sprintf("vol-%d", i%3), "snap"); err != nil {
+				if _, err := e.svc.Create(context.Background(), tenant, fmt.Sprintf("vol-%d", i%3), "snap", ""); err != nil {
 					t.Error(err)
 				}
 			}

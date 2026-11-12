@@ -13,7 +13,10 @@ type Filter struct {
 }
 
 type Store interface {
-	Create(ctx context.Context, s Snapshot) error
+	// Create stores s. If s has an idempotency key the tenant already used,
+	// nothing is stored, and the existing snapshot is returned with
+	// created=false. The check and the insert are atomic.
+	Create(ctx context.Context, s Snapshot) (stored Snapshot, created bool, err error)
 	Get(ctx context.Context, tenantID, id string) (Snapshot, error)
 	List(ctx context.Context, tenantID string, f Filter) ([]Snapshot, error)
 	// Update applies fn atomically and stores the result, unless fn returns an
@@ -25,17 +28,32 @@ type Store interface {
 type MemoryStore struct {
 	mu        sync.RWMutex
 	snapshots map[string]Snapshot
+	byKey     map[idempotencyKey]string // snapshot ID per tenant and key
+}
+
+type idempotencyKey struct {
+	tenantID, key string
 }
 
 func NewMemoryStore() *MemoryStore {
-	return &MemoryStore{snapshots: make(map[string]Snapshot)}
+	return &MemoryStore{
+		snapshots: make(map[string]Snapshot),
+		byKey:     make(map[idempotencyKey]string),
+	}
 }
 
-func (m *MemoryStore) Create(_ context.Context, s Snapshot) error {
+func (m *MemoryStore) Create(_ context.Context, s Snapshot) (Snapshot, bool, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if s.IdempotencyKey != "" {
+		k := idempotencyKey{s.TenantID, s.IdempotencyKey}
+		if id, ok := m.byKey[k]; ok {
+			return m.snapshots[id], false, nil
+		}
+		m.byKey[k] = s.ID
+	}
 	m.snapshots[s.ID] = s
-	return nil
+	return s, true, nil
 }
 
 func (m *MemoryStore) Get(_ context.Context, tenantID, id string) (Snapshot, error) {

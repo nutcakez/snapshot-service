@@ -3,7 +3,8 @@ package http
 import "net/http"
 
 const (
-	tenantHeader = "X-Tenant-ID"
+	tenantHeader      = "X-Tenant-ID"
+	idempotencyHeader = "Idempotency-Key"
 )
 
 func withTenant(next func(http.ResponseWriter, *http.Request, string)) http.HandlerFunc {

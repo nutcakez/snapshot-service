@@ -44,6 +44,10 @@ type Snapshot struct {
 	Error     string    `json:"error"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
+
+	// IdempotencyKey is the client's Idempotency-Key header from the create
+	// request, unique per tenant. Empty when the client sent none.
+	IdempotencyKey string `json:"-"`
 }
 
 var (
@@ -51,4 +55,7 @@ var (
 	ErrInvalidName   = errors.New("name must not be empty")
 	ErrInvalidStatus = errors.New("unknown status")
 	ErrNotDeletable  = errors.New("snapshot cannot be deleted in its current state")
+
+	ErrInvalidIdempotencyKey = errors.New("idempotency key must be at most 255 characters")
+	ErrIdempotencyKeyReused  = errors.New("idempotency key was already used for a different request")
 )

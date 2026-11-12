@@ -7,8 +7,6 @@ import (
 	"time"
 )
 
-// Service implements the snapshot CRUD rules on top of a Store, and hands
-// storage operations to an Executor to run in the background.
 type Service struct {
 	store Store
 	exec  Executor
@@ -18,23 +16,41 @@ func NewService(store Store, exec Executor) *Service {
 	return &Service{store: store, exec: exec}
 }
 
-func (s *Service) Create(ctx context.Context, tenantID, volumeID, name string) (Snapshot, error) {
+const maxIdempotencyKeyLen = 255
+
+// Create records a new snapshot in the pending state and starts creating it.
+//
+// With an idempotency key, repeating the same request returns the snapshot
+// the first request created, in its current state, and starts nothing new.
+// Reusing the key for a different volume or name fails with
+// ErrIdempotencyKeyReused. An empty key disables this.
+func (s *Service) Create(ctx context.Context, tenantID, volumeID, name, idempotencyKey string) (Snapshot, error) {
 	name = strings.TrimSpace(name)
 	if name == "" {
 		return Snapshot{}, ErrInvalidName
 	}
-	now := time.Now().UTC()
-	snap := Snapshot{
-		ID:        rand.Text(),
-		TenantID:  tenantID,
-		VolumeID:  volumeID,
-		Name:      name,
-		Status:    StatusPending,
-		CreatedAt: now,
-		UpdatedAt: now,
+	if len(idempotencyKey) > maxIdempotencyKeyLen {
+		return Snapshot{}, ErrInvalidIdempotencyKey
 	}
-	if err := s.store.Create(ctx, snap); err != nil {
+	now := time.Now().UTC()
+	snap, created, err := s.store.Create(ctx, Snapshot{
+		ID:             rand.Text(),
+		TenantID:       tenantID,
+		VolumeID:       volumeID,
+		Name:           name,
+		Status:         StatusPending,
+		CreatedAt:      now,
+		UpdatedAt:      now,
+		IdempotencyKey: idempotencyKey,
+	})
+	if err != nil {
 		return Snapshot{}, err
+	}
+	if !created {
+		if snap.VolumeID != volumeID || snap.Name != name {
+			return Snapshot{}, ErrIdempotencyKeyReused
+		}
+		return snap, nil
 	}
 	s.exec.Submit(Job{Op: OpCreate, TenantID: tenantID, SnapshotID: snap.ID, VolumeID: volumeID})
 	return snap, nil
