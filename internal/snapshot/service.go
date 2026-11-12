@@ -7,16 +7,17 @@ import (
 	"time"
 )
 
-// Service implements the snapshot CRUD rules on top of a Store.
+// Service implements the snapshot CRUD rules on top of a Store, and hands
+// storage operations to an Executor to run in the background.
 type Service struct {
 	store Store
+	exec  Executor
 }
 
-func NewService(store Store) *Service {
-	return &Service{store: store}
+func NewService(store Store, exec Executor) *Service {
+	return &Service{store: store, exec: exec}
 }
 
-// Create records a new snapshot in the pending state.
 func (s *Service) Create(ctx context.Context, tenantID, volumeID, name string) (Snapshot, error) {
 	name = strings.TrimSpace(name)
 	if name == "" {
@@ -35,6 +36,7 @@ func (s *Service) Create(ctx context.Context, tenantID, volumeID, name string) (
 	if err := s.store.Create(ctx, snap); err != nil {
 		return Snapshot{}, err
 	}
+	s.exec.Submit(Job{Op: OpCreate, TenantID: tenantID, SnapshotID: snap.ID, VolumeID: volumeID})
 	return snap, nil
 }
 
@@ -52,13 +54,19 @@ func (s *Service) List(ctx context.Context, tenantID string, f Filter) ([]Snapsh
 // Delete moves a snapshot to the deleting state. The check and the transition
 // happen atomically inside Store.Update, so concurrent deletes can't both win.
 func (s *Service) Delete(ctx context.Context, tenantID, id string) (Snapshot, error) {
-	return s.store.Update(ctx, tenantID, id, func(snap *Snapshot) error {
+	snap, err := s.store.Update(ctx, tenantID, id, func(snap *Snapshot) error {
 		if !snap.Status.Deletable() {
 			return ErrNotDeletable
 		}
 		snap.Status = StatusDeleting
+		snap.Attempts = 0 // attempts count the delete from here on
 		snap.Error = ""
 		snap.UpdatedAt = time.Now().UTC()
 		return nil
 	})
+	if err != nil {
+		return Snapshot{}, err
+	}
+	s.exec.Submit(Job{Op: OpDelete, TenantID: tenantID, SnapshotID: snap.ID, VolumeID: snap.VolumeID})
+	return snap, nil
 }

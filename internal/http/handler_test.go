@@ -20,9 +20,14 @@ type errorResponse struct {
 	} `json:"error"`
 }
 
+// noopExecutor drops jobs, so snapshots keep the states the tests set.
+type noopExecutor struct{}
+
+func (noopExecutor) Submit(snapshot.Job) {}
+
 func newTestAPI() (http.Handler, *snapshot.MemoryStore) {
 	store := snapshot.NewMemoryStore()
-	return New(snapshot.NewService(store)), store
+	return New(snapshot.NewService(store, noopExecutor{})), store
 }
 
 func do(t *testing.T, h http.Handler, method, target, tenant, body string) *httptest.ResponseRecorder {
