@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"asdasd/internal/snapshot"
-	"asdasd/internal/storage"
+	"github.com/nutcakez/snapshot-service/internal/snapshot"
+	"github.com/nutcakez/snapshot-service/internal/storage"
 )
 
 var _ snapshot.StorageBackend = (*storage.Mock)(nil)

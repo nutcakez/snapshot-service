@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	server "asdasd/internal/http"
-	"asdasd/internal/snapshot"
+	server "github.com/nutcakez/snapshot-service/internal/http"
+	"github.com/nutcakez/snapshot-service/internal/snapshot"
 )
 
 func TestStartWrapsConfigError(t *testing.T) {

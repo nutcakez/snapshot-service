@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"time"
 
-	"asdasd/internal/logctx"
+	"github.com/nutcakez/snapshot-service/internal/logctx"
 )
 
 const (

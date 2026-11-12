@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"asdasd/internal/storage"
+	"github.com/nutcakez/snapshot-service/internal/storage"
 )
 
 // gate is a fake backend call that blocks until released or cancelled.

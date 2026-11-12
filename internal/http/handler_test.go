@@ -13,8 +13,8 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"asdasd/internal/logctx"
-	"asdasd/internal/snapshot"
+	"github.com/nutcakez/snapshot-service/internal/logctx"
+	"github.com/nutcakez/snapshot-service/internal/snapshot"
 )
 
 type errorResponse struct {

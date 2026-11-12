@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"asdasd/internal/logctx"
+	"github.com/nutcakez/snapshot-service/internal/logctx"
 )
 
 func TestJobsCarryTheRequestID(t *testing.T) {

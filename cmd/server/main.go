@@ -12,11 +12,11 @@ import (
 	"syscall"
 	"time"
 
-	"asdasd/internal/config"
-	server "asdasd/internal/http"
-	"asdasd/internal/logctx"
-	"asdasd/internal/snapshot"
-	"asdasd/internal/storage"
+	"github.com/nutcakez/snapshot-service/internal/config"
+	server "github.com/nutcakez/snapshot-service/internal/http"
+	"github.com/nutcakez/snapshot-service/internal/logctx"
+	"github.com/nutcakez/snapshot-service/internal/snapshot"
+	"github.com/nutcakez/snapshot-service/internal/storage"
 )
 
 func main() {

@@ -6,7 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 
-	"asdasd/internal/snapshot"
+	"github.com/nutcakez/snapshot-service/internal/snapshot"
 )
 
 const (

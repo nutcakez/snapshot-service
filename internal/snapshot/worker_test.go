@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"asdasd/internal/storage"
+	"github.com/nutcakez/snapshot-service/internal/storage"
 )
 
 // fakeBackend runs fn for every call and records how many calls overlap,

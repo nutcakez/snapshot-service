@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"asdasd/internal/logctx"
+	"github.com/nutcakez/snapshot-service/internal/logctx"
 )
 
 type Service struct {
